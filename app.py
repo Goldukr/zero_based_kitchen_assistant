@@ -254,6 +254,109 @@ def load_shelf_life():
     return pd.DataFrame(columns=["item", "days"])
 
 
+@st.cache_data
+def load_inventory():
+    if os.path.exists("inventory.csv"):
+        return pd.read_csv("inventory.csv")
+    return pd.DataFrame(columns=["item", "added_date", "expiry_days"])
+
+
+def normalize_item(value):
+    return str(value).strip().lower()
+
+
+def build_recipe_suggestions(available_items, max_results=6):
+    recipes = [
+        {
+            "name": "Roasted root tray",
+            "required": ["potato", "sweetpotato", "carrot", "beetroot", "onion"],
+            "optional": ["garlic", "paprika"],
+        },
+        {
+            "name": "Spicy veggie stir-fry",
+            "required": ["capsicum", "onion", "carrot", "cabbage"],
+            "optional": ["chilli pepper", "garlic", "ginger", "soy beans"],
+        },
+        {
+            "name": "Cauliflower & peas curry",
+            "required": ["cauliflower", "peas", "tomato", "onion"],
+            "optional": ["garlic", "ginger", "paprika", "chilli pepper"],
+        },
+        {
+            "name": "Eggplant tomato saute",
+            "required": ["eggplant", "tomato", "onion"],
+            "optional": ["garlic", "paprika"],
+        },
+        {
+            "name": "Spinach potato hash",
+            "required": ["spinach", "potato", "onion"],
+            "optional": ["garlic", "paprika"],
+        },
+        {
+            "name": "Corn & capsicum salad",
+            "required": ["sweetcorn", "capsicum", "cucumber", "tomato"],
+            "optional": ["lemon", "onion"],
+        },
+        {
+            "name": "Fresh fruit bowl",
+            "required": ["apple", "banana", "orange"],
+            "optional": ["mango", "grapes", "kiwi", "pear", "pineapple", "pomegranate", "watermelon"],
+        },
+        {
+            "name": "Citrus fruit salad",
+            "required": ["orange", "lemon", "kiwi"],
+            "optional": ["grapes", "pomegranate"],
+        },
+        {
+            "name": "Lettuce cucumber salad",
+            "required": ["lettuce", "cucumber", "tomato"],
+            "optional": ["lemon", "onion"],
+        },
+        {
+            "name": "Cabbage & peas saute",
+            "required": ["cabbage", "peas", "onion"],
+            "optional": ["garlic", "chilli pepper"],
+        },
+        {
+            "name": "Ginger soy saute",
+            "required": ["soy beans", "capsicum", "onion"],
+            "optional": ["ginger", "garlic", "chilli pepper"],
+        },
+        {
+            "name": "Radish cucumber salad",
+            "required": ["raddish", "cucumber", "lemon"],
+            "optional": ["onion"],
+        },
+    ]
+
+    results = []
+    available = {normalize_item(item) for item in available_items}
+    for recipe in recipes:
+        required = [normalize_item(item) for item in recipe["required"]]
+        optional = [normalize_item(item) for item in recipe.get("optional", [])]
+        missing_required = [item for item in required if item not in available]
+        matched_optional = [item for item in optional if item in available]
+        coverage = (len(required) - len(missing_required)) / max(len(required), 1)
+        results.append(
+            {
+                "name": recipe["name"],
+                "required": recipe["required"],
+                "optional": recipe.get("optional", []),
+                "missing_required": missing_required,
+                "matched_optional": matched_optional,
+                "coverage": coverage,
+            }
+        )
+
+    ready = [item for item in results if not item["missing_required"]]
+    if ready:
+        ready.sort(key=lambda item: (-len(item["matched_optional"]), item["name"]))
+        return ready[:max_results], False
+
+    results.sort(key=lambda item: (-item["coverage"], -len(item["matched_optional"]), item["name"]))
+    return results[:max_results], True
+
+
 # Load model (cached)
 model = load_model()
 
@@ -338,4 +441,49 @@ if not shelf_df.empty:
     st.dataframe(shelf_df, use_container_width=True)
 else:
     st.warning("shelf_life.csv not found.")
+st.markdown("</div>", unsafe_allow_html=True)
+
+# Recipe suggestions from inventory
+st.markdown("<div class='table-wrap'>", unsafe_allow_html=True)
+st.subheader("Recipe Suggestions")
+inventory_df = load_inventory()
+if inventory_df.empty:
+    st.warning("inventory.csv not found.")
+else:
+    available_items = sorted(
+        {
+            normalize_item(item)
+            for item in inventory_df["item"].dropna().tolist()
+            if str(item).strip()
+        }
+    )
+    if not available_items:
+        st.info("No ingredients found in inventory.")
+    else:
+        st.markdown(
+            f"<p class='muted'>Available ingredients: {', '.join(available_items)}</p>",
+            unsafe_allow_html=True,
+        )
+        suggestions, needs_missing = build_recipe_suggestions(available_items)
+        if needs_missing:
+            st.info("No full matches yet. Showing closest matches based on your inventory.")
+        for suggestion in suggestions:
+            missing = ", ".join(suggestion["missing_required"]) or "None"
+            optional = ", ".join(suggestion["optional"]) or "None"
+            status_line = (
+                "Ready to cook with what you have."
+                if not suggestion["missing_required"]
+                else f"Missing required: {missing}"
+            )
+            st.markdown(
+                f"""
+<div class="card">
+  <h3>{suggestion['name']}</h3>
+  <p class="muted">Required: {', '.join(suggestion['required'])}</p>
+  <p class="muted">Optional: {optional}</p>
+  <div class="result-pill">{status_line}</div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
 st.markdown("</div>", unsafe_allow_html=True)
